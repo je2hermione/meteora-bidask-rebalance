@@ -41,6 +41,8 @@ npm install
 | `LOWER_BIN` | — | `lowerBinId` posisi | Batas segitiga arah `bid` |
 | `SLIPPAGE_PCT` | — | `1` | Toleransi slippage deposit (%) |
 | `PRIORITY_FEE_MICROLAMPORTS` | — | `0` | Priority fee (microlamports) |
+| `ATOMIC` | — | `true` | `true` = coba gabung withdraw+deposit jadi 1 tx atomic (fallback otomatis ke 2 fase kalau tidak muat); `false` = selalu 2 fase |
+| `ATOMIC_BUFFER_PCT` | — | `0.5` | Buffer estimasi jumlah deposit di mode atomic (%) — menutup selisih rounding/swap kecil antara baca state & eksekusi |
 | `DRY_RUN` | — | `true` | `true` = simulasi saja, tidak kirim tx |
 
 ## Cara pakai
@@ -63,18 +65,30 @@ npx tsx rebalance-triangle.ts        # dry run dulu
 
 ## Alur eksekusi (mode live)
 
-1. Baca posisi + active bin saat ini.
-2. **Fase 1 — withdraw:** hapus semua liquidity di range sisi yang dipilih.
+**Mode atomic (default):** instruksi withdraw + re-deposit digabung menjadi
+**satu transaksi** — price tidak mungkin berubah di antaranya, dan tidak ada
+status setengah jalan (gagal = semua batal, dana aman). Jumlah deposit dihitung
+dari estimasi on-chain dikurangi buffer `ATOMIC_BUFFER_PCT` (default 0.5%),
+karena dalam 1 tx tidak bisa membaca saldo hasil withdraw dulu; sisa dust
+kecil tertinggal di wallet.
+
+Atomic hanya dipakai kalau gabungan instruksi muat dalam batas Solana
+(1232 bytes / 1.4M CU) — dicek otomatis via simulasi + ukur ukuran tx.
+Untuk range besar (>~20 bins), otomatis **fallback ke mode 2 fase**:
+
+1. **Fase 1 — withdraw:** hapus semua liquidity di range sisi yang dipilih.
    Posisi tetap dibuka (`shouldClaimAndClose: false`).
-3. **Refresh state** — kalau price bergeser di antara fase, segitiga dihitung ulang
+2. **Refresh state** — kalau price bergeser di antara fase, segitiga dihitung ulang
    dari active bin yang baru. Kalau price malah bergerak melewati batas range,
    script berhenti dan token tetap di wallet.
-4. **Fase 2 — deposit:** token yang ditarik dipasang kembali sebagai segitiga
-   bid-ask satu sisi (pakai helper resmi SDK `calculateBidAskDistribution`),
-   dalam posisi yang sama.
+3. **Fase 2 — deposit:** token yang ditarik (diukur dari saldo aktual yang
+   diterima) dipasang kembali sebagai segitiga bid-ask satu sisi
+   (pakai helper resmi SDK `calculateBidAskDistribution`), dalam posisi yang sama.
 
-Jumlah yang di-deposit = min(estimasi dari data posisi on-chain, token yang
-benar-benar diterima), dikurangi buffer fee 0.005 SOL kalau token deposit adalah SOL.
+Jumlah yang di-deposit (2 fase) = min(estimasi dari data posisi on-chain, token
+yang benar-benar diterima), dikurangi buffer fee 0.005 SOL kalau token deposit
+adalah SOL. Mode atomic selalu ditawarkan dulu; dry-run melaporkan jalur mana
+yang akan dipakai beserta ukuran tx & estimasi CU.
 
 ## Catatan
 
